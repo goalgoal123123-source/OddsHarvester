@@ -1,29 +1,27 @@
-# Single-stage image for running the OddsHarvester CLI in a container.
-#
-# Base image tag MUST stay aligned with the `playwright` version locked in
-# uv.lock / pinned in pyproject.toml. The MS Playwright image ships the
-# matching Chromium build; a mismatch breaks scraping at runtime.
-# Current: playwright 1.57.0  ->  base tag v1.57.0-noble
-FROM mcr.microsoft.com/playwright/python:v1.57.0-noble
+FROM python:3.11-slim
 
-# Install uv globally
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# 1. 安裝系統基礎工具
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# Copy application files
-COPY src /app/src
-COPY pyproject.toml uv.lock README.md LICENSE.txt /app/
-
-# Install runtime dependencies (the `dev` group is not installed)
+# 2. 安裝 Python 套件管理工具 (uv) 並安裝專案依賴
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# Activate the virtual environment
-ENV PATH="/app/.venv/bin:$PATH"
+# 3. 關鍵：下載 Chromium 瀏覽器及其所需的底層系統庫
+RUN uv run playwright install --with-deps chromium
 
-# CLI entrypoint: lets `docker run odds-harvester upcoming ...` append CLI
-# args directly. Playwright runs with --headless from the CLI, so no virtual
-# display (xvfb) is required — wrapping the entrypoint with xvfb-run hangs
-# the container on macOS/colima before python ever starts.
-ENTRYPOINT ["python3", "-m", "oddsharvester"]
+# 4. 把專案所有檔案（包含剛才建立的 run_collector.sh）複製進去
+COPY . .
+
+# 5. 給執行腳本加上執行權限，並建立存放抓取結果的資料夾
+RUN chmod +x run_collector.sh && mkdir -p /app/output
+
+# 6. 指定容器開機時自動執行的動作
+CMD ["bash", "run_collector.sh"]
